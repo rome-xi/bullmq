@@ -105,6 +105,14 @@ export const MIGRATIONS: readonly Migration[] = [
     minClientVersion: 6,
     load: () => loadMigrationSql('0011_obliterate_producer_lock.sql'),
   },
+  {
+    version: 12,
+    name: '0012_retention_keep_count_zero',
+    // Function-body fix only (CREATE OR REPLACE, identical signature). A
+    // keep-count of 0 now removes only the finishing job, matching Redis.
+    minClientVersion: 6,
+    load: () => loadMigrationSql('0012_retention_keep_count_zero.sql'),
+  },
 ];
 
 /**

@@ -1406,6 +1406,66 @@ describe('PostgreSQL backend operations', () => {
     }
   });
 
+  // Redis (`moveToFinished-14.lua`) treats a keep-count of 0 as "remove only
+  // this job". A later job finished with that option must not trim jobs that
+  // were kept with `false`.
+  describe('keep-count 0 removes only the finishing job', () => {
+    async function finish(
+      backend: IQueueBackend,
+      id: string,
+      token: string,
+      failed: boolean,
+      keep: false | number | { count: number } | { age: number; count: number },
+    ): Promise<void> {
+      await backend.moveToActive(token);
+      if (failed) {
+        await backend.moveToFailed({ id } as any, 'boom', keep, token, false);
+      } else {
+        await backend.moveToCompleted({ id } as any, 1, keep, token, false);
+      }
+    }
+
+    it.each([
+      { failed: false, keep: 0, label: 'removeOnComplete: 0' },
+      {
+        failed: false,
+        keep: { count: 0 },
+        label: 'removeOnComplete: { count: 0 }',
+      },
+      {
+        failed: false,
+        keep: { age: 60, count: 0 },
+        label: 'removeOnComplete: { age: 60, count: 0 }',
+      },
+      { failed: true, keep: 0, label: 'removeOnFail: 0' },
+      { failed: true, keep: { count: 0 }, label: 'removeOnFail: { count: 0 }' },
+    ])(
+      '$label deletes that job and leaves an earlier keep-forever job',
+      async ({ failed, keep }) => {
+        const backend = newBackend();
+        try {
+          await backend.waitUntilReady();
+          const token = randomUUID();
+          const keptState = failed ? 'failed' : 'completed';
+
+          const keptId = await backend.addJob(makeJob(), 'kept');
+          await finish(backend, keptId, token, failed, false);
+          expect(await backend.getState(keptId)).toBe(keptState);
+
+          const removedId = await backend.addJob(makeJob(), 'removed');
+          await finish(backend, removedId, token, failed, keep);
+
+          expect(await backend.getState(keptId)).toBe(keptState);
+          expect(await backend.getJobData(keptId)).toBeTruthy();
+          expect(await backend.getState(removedId)).toBe('unknown');
+          expect(await backend.getJobData(removedId)).toBeUndefined();
+        } finally {
+          await backend.close();
+        }
+      },
+    );
+  });
+
   describe('deduplication when the winner job no longer exists', () => {
     const dedupJob = (dedupId: string) =>
       makeJob({
